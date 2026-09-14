@@ -2,69 +2,54 @@
 
 <PageTitle>Smart-X</PageTitle>
 
-<div class="pillar-container">
-    <h1>Smart-X IoT Mesh Ecosystem</h1>
-    <p>Select a module to continue.</p>
+<div class="home-shell">
+    <header class="home-header">
+        <h1>Smart-X IoT Mesh Ecosystem</h1>
+        <p class="muted">Industrial IoT dashboard for ESP32 sensor mesh networks.</p>
+    </header>
 
-    <div class="pillar-grid">
-        <a href="/ingestion" class="pillar-card pillar-active">
-            <h2>Sensor Data Ingestion</h2>
-            <p>Register nodes, upload files, monitor live telemetry.</p>
+    <main class="home-grid">
+        <a class="home-card card-cta" href="/ingestion">
+            <div class="card-title">Sensor Data Ingestion</div>
+            <div class="card-body">Register nodes, upload files, monitor live telemetry.</div>
         </a>
 
-        <div class="pillar-card pillar-disabled">
-            <h2>Real-Time Command Stream</h2>
-            <p>Coming in Part 2.</p>
+        <div class="home-card card-coming">
+            <div class="card-title">Real-Time Command Stream</div>
+            <div class="card-body muted">Coming in Part 2.</div>
         </div>
 
-        <div class="pillar-card pillar-disabled">
-            <h2>Network Topology</h2>
-            <p>Coming in Part 3.</p>
+        <div class="home-card card-coming">
+            <div class="card-title">Network Topology</div>
+            <div class="card-body muted">Coming in Part 3.</div>
         </div>
-    </div>
+    </main>
+
+    <style>
+        /* Layout and background remain unchanged; enforce high-contrast text colors explicitly */
+        .home-shell { padding: 2rem; background: linear-gradient(180deg,#071024,#04101a); color: #e5e7eb; min-height: 60vh; }
+        .home-header { text-align: center; }
+
+        /* Headings: pure white */
+        h1, h2, h3 { color: #ffffff; }
+
+        /* Labels: light grey */
+        label { color: #d1d5db; }
+
+        /* Body and paragraph text: near-white */
+        p, .card-body, .muted { color: #e5e7eb; }
+
+        /* Inputs and selects: input text should be white; placeholder lighter grey */
+        input, textarea, select, .form-control, .control { color: #ffffff; }
+        input::placeholder, textarea::placeholder, .control::placeholder { color: #9ca3af; opacity: 1; }
+
+        .home-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; max-width: 960px; margin: 2rem auto 0; }
+        .home-card { background: #0f1724; padding: 1.25rem; border-radius: 12px; color: inherit; text-decoration: none; box-shadow: 0 8px 24px rgba(2,6,23,0.6); }
+        .card-cta { border: 1px solid rgba(6,182,212,0.12); display: flex; flex-direction: column; justify-content: center; }
+        .card-title { font-weight: 700; font-size: 1.1rem; margin-bottom: 0.4rem; }
+        .card-cta:hover { transform: translateY(-4px); box-shadow: 0 14px 40px rgba(6,182,212,0.06); }
+
+        @@media (max-width: 860px) { .home-grid { grid-template-columns: 1fr; } }
+    </style>
+
 </div>
-
-<style>
-    .pillar-container {
-        padding: 2rem;
-        text-align: center;
-    }
-
-    .pillar-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 1.5rem;
-        margin-top: 2rem;
-        max-width: 900px;
-        margin-left: auto;
-        margin-right: auto;
-    }
-
-    .pillar-card {
-        display: block;
-        padding: 2rem 1rem;
-        border-radius: 8px;
-        text-decoration: none;
-        color: inherit;
-        border: 2px solid #ddd;
-        transition: transform 0.15s ease, box-shadow 0.15s ease;
-    }
-
-    .pillar-active {
-        background: #f0f7ff;
-        border-color: #3b82f6;
-        cursor: pointer;
-    }
-
-    .pillar-active:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
-    }
-
-    .pillar-disabled {
-        background: #f5f5f5;
-        color: #999;
-        cursor: not-allowed;
-        opacity: 0.6;
-    }
-</style>

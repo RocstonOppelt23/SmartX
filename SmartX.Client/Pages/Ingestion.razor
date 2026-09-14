@@ -1,137 +1,205 @@
 ﻿@page "/ingestion"
 @using System.Net.Http.Json
+@using System.Net.Http
 @using System.Text.Json
 @using System.Text.Json.Serialization
+@using Microsoft.AspNetCore.Components.Forms
 @using SmartX.Shared
 @inject HttpClient Http
 @implements IDisposable
 
 <PageTitle>Sensor Data Ingestion</PageTitle>
 
-<h1>Sensor Data Ingestion</h1>
-
-<h3>Register a Node</h3>
-
-<EditForm Model="@newSensor" OnValidSubmit="RegisterSensor">
-    <div class="form-group">
-        <label>MAC Address</label>
-        <InputText @bind-Value="newSensor.MacAddress" class="form-control" placeholder="AA:BB:CC:00:11:22" />
+<div class="ingestion-shell">
+    <div class="ingestion-header">
+        <h1>Sensor Data Ingestion</h1>
+        <p class="muted">Register nodes, send test telemetry and monitor node states.</p>
     </div>
 
-    <div class="form-group">
-        <label>Deployment Location</label>
-        <InputText @bind-Value="newSensor.DeploymentLocation" class="form-control" placeholder="Zone 1 / Sub-Zone B" />
-    </div>
+    <div class="ingestion-grid">
+        <section class="card card-left">
+            <h3>Register a Node</h3>
 
-    <div class="form-group">
-        <label>Category</label>
-        <InputSelect @bind-Value="newSensor.Category" class="form-control">
-            <option value="@SensorCategory.Environmental">Environmental</option>
-            <option value="@SensorCategory.Power">Power</option>
-            <option value="@SensorCategory.Actuator">Actuator</option>
-        </InputSelect>
-    </div>
+            <EditForm Model="@newSensor" OnValidSubmit="RegisterSensor">
+                <div class="form-row">
+                    <label>MAC Address</label>
+                    <InputText @bind-Value="newSensor.MacAddress" class="control" placeholder="AA:BB:CC:00:11:22" />
+                </div>
 
-    <button type="submit" class="btn btn-primary mt-2">Register Node</button>
-</EditForm>
+                <div class="form-row">
+                    <label>Deployment Location</label>
+                    <InputText @bind-Value="newSensor.DeploymentLocation" class="control" placeholder="Zone 1 / Sub-Zone B" />
+                </div>
 
-@if (!string.IsNullOrEmpty(statusMessage))
-{
-    <p class="mt-3">@statusMessage</p>
-}
+                <div class="form-row">
+                    <label>Category</label>
+                    <InputSelect @bind-Value="newSensor.Category" class="control">
+                        <option value="@SensorCategory.Environmental">Environmental</option>
+                        <option value="@SensorCategory.Power">Power</option>
+                        <option value="@SensorCategory.Actuator">Actuator</option>
+                    </InputSelect>
+                </div>
 
-<hr />
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">Register Node</button>
+                </div>
+            </EditForm>
 
-<h3>Registered Nodes</h3>
+            @if (!string.IsNullOrEmpty(statusMessage))
+            {
+                <div class="status-message">@statusMessage</div>
+            }
 
-@if (registeredSensors is null)
-{
-    <p>Loading...</p>
-}
-else if (registeredSensors.Count == 0)
-{
-    <p>No nodes registered yet.</p>
-}
-else
-{
-    <ul>
-        @foreach (var sensor in registeredSensors)
-        {
-            <li>@sensor.MacAddress — @sensor.DeploymentLocation (@sensor.Category)</li>
-        }
-    </ul>
-}
+            <hr />
 
-<hr />
+            <h3>Registered Nodes</h3>
 
-<h3>Send Test Telemetry</h3>
+            @if (registeredSensors is null)
+            {
+                <div class="muted">Loading...</div>
+            }
+            else if (registeredSensors.Count == 0)
+            {
+                <div class="muted">No nodes registered yet.</div>
+            }
+            else
+            {
+                <ul class="registered-list">
+                    @foreach (var sensor in registeredSensors)
+                    {
+                        <li><strong>@sensor.MacAddress</strong><span class="meta">@sensor.DeploymentLocation — @sensor.Category</span></li>
+                    }
+                </ul>
+            }
 
-<div class="form-group">
-    <label>Node ID</label>
-    <input @bind="testNodeId" class="form-control" placeholder="NODE-01" />
-</div>
+            <hr />
 
-<div class="form-group">
-    <label>Reading Value</label>
-    <input @bind="testValue" type="number" class="form-control" />
-</div>
+            <h3>Upload File to Node</h3>
 
-<button class="btn btn-secondary mt-2" @onclick="SendTestTelemetry">Send Reading</button>
-
-<hr />
-
-<h3>Node Grid</h3>
-<p class="text-muted">Muted = normal. Red = anomalous. Fading grey = going stale. Flat grey = dead.</p>
-
-<div class="tile-grid">
-    @if (tileStates is not null)
-    {
-        @foreach (var (nodeId, state) in tileStates)
-        {
-            <div class="tile @GetTileCssClass(state)">
-                @nodeId
+            <div class="form-row">
+                <label>MAC Address</label>
+                <input @bind="uploadMacAddress" class="control" placeholder="AA:BB:CC:00:11:22" />
             </div>
+
+            <div class="form-row">
+                <InputFile OnChange="HandleFileSelected" class="control" />
+            </div>
+
+            <div class="form-actions">
+                <button class="btn-primary" @onclick="UploadFile" disabled="@(selectedFile is null)">Upload File</button>
+            </div>
+
+            @if (!string.IsNullOrEmpty(uploadStatusMessage))
+            {
+                <div class="status-message">@uploadStatusMessage</div>
+            }
+
+            <hr />
+
+            <h3>Send Test Telemetry</h3>
+
+            <div class="form-row">
+                <label>Node ID</label>
+                <input @bind="testNodeId" class="control" placeholder="NODE-01" />
+            </div>
+
+            <div class="form-row">
+                <label>Reading Value</label>
+                <input @bind="testValue" type="number" class="control" />
+            </div>
+
+            <div class="form-actions">
+                <button class="btn-secondary" @onclick="SendTestTelemetry">Send Reading</button>
+            </div>
+        </section>
+
+        <aside class="card card-right">
+            <h3>Node Grid</h3>
+            <p class="muted small">Muted = normal. Red = anomalous. Fading grey = going stale. Flat grey = dead.</p>
+
+            <div class="tile-grid">
+                @if (tileStates is not null)
+                {
+                    @foreach (var (nodeId, state) in tileStates)
+                    {
+                        <div class="tile @GetTileCssClass(state)">@nodeId</div>
+                    }
+                }
+            </div>
+        </aside>
+    </div>
+
+    <style>
+        :root {
+            --bg: #0b1220;
+            --panel: #0f1724;
+            --muted: #9ca3af;
+            --accent: #06b6d4;
+            --success: #10b981;
+            --danger: #ef4444;
+            --card-radius: 10px;
         }
-    }
+
+        .ingestion-shell { background: linear-gradient(180deg, var(--bg), #08111a); padding: 2rem; min-height: 80vh; color: #e6eef6; }
+        .ingestion-header h1 { margin: 0 0 0.25rem 0; }
+        .muted { color: var(--muted); }
+
+        .ingestion-grid { display: grid; grid-template-columns: 1fr 360px; gap: 1.5rem; align-items: start; margin-top: 1rem; }
+
+        .card { background: var(--panel); padding: 1rem; border-radius: var(--card-radius); box-shadow: 0 6px 18px rgba(2,6,23,0.6); }
+        .card-left { min-height: 420px; }
+        .card-right { position: sticky; top: 1rem; }
+
+        .form-row { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.6rem; }
+        label { font-size: 0.85rem; color: var(--muted); }
+        .control { background: transparent; border: 1px solid rgba(255,255,255,0.06); padding: 10px 12px; border-radius: 6px; color: #e6eef6; }
+        .control::placeholder, input::placeholder { color: #cbd5e1; opacity: 1; }
+
+        .form-actions { margin-top: 0.6rem; }
+        .btn-primary { background: linear-gradient(90deg,#0ea5a4,#06b6d4); border: none; color: #021019; padding: 8px 12px; border-radius: 8px; font-weight: 600; }
+        .btn-secondary { background: transparent; border: 1px solid rgba(255,255,255,0.06); color: #cbd5e1; padding: 8px 12px; border-radius: 8px; }
+
+        .status-message { margin-top: 0.75rem; padding: 8px 10px; border-radius: 8px; background: rgba(16,185,129,0.12); color: var(--success); }
+
+        .registered-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+        .registered-list li { display: flex; justify-content: space-between; align-items: center; padding: 8px; border-radius: 6px; background: rgba(255,255,255,0.02); }
+        .registered-list .meta { color: var(--muted); font-size: 0.85rem; margin-left: 10px; }
+
+        .tile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 10px; margin-top: 1rem; }
+
+        .tile { padding: 14px 8px; border-radius: 6px; text-align: center; font-size: 0.85rem; font-weight: 600; color: white; transition: background-color 0.4s ease, opacity 0.4s ease; }
+        .tile-normal { background-color: #334155; }
+        .tile-anomalous { background-color: #dc2626; }
+        .tile-stale { background-color: #334155; opacity: 0.5; }
+        .tile-dead { background-color: #6b7280; opacity: 0.8; color: #061019; }
+
+        @@media (max-width: 880px) { .ingestion-grid { grid-template-columns: 1fr; } .card-right { position: static; } }
+    </style>
+    <style>
+        /* High-contrast text overrides while preserving layout and non-text styling */
+        /* Apply strong foreground colors without altering layout or backgrounds */
+        .ingestion-shell, .ingestion-shell * { color: #ffffff !important; }
+
+        /* Headings: pure white */
+        h1, h2, h3 { color: #ffffff !important; }
+
+        /* Labels, muted text and form meta: slightly off-white for readability */
+        label, .muted, p, .registered-list .meta { color: #e5e7eb !important; }
+
+        /* Inputs and controls: ensure input text is white; placeholders slightly muted */
+        input, textarea, select, .form-control, .control { color: #ffffff !important; }
+        input::placeholder, textarea::placeholder, .control::placeholder { color: #9ca3af !important; opacity: 1; }
+
+        /* Buttons and status text */
+        .btn-secondary { color: #e5e7eb !important; }
+        .status-message { color: #10b981 !important; }
+
+        /* Tiles */
+        .tile { color: #ffffff !important; }
+        .tile-dead { color: #061019 !important; }
+    </style>
+
 </div>
-
-<style>
-    .tile-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
-        gap: 10px;
-        margin-top: 1rem;
-        max-width: 700px;
-    }
-
-    .tile {
-        padding: 14px 8px;
-        border-radius: 6px;
-        text-align: center;
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: white;
-        transition: background-color 0.4s ease, opacity 0.4s ease;
-    }
-
-    .tile-normal {
-        background-color: #4b5563; /* muted baseline */
-    }
-
-    .tile-anomalous {
-        background-color: #dc2626; /* single alert hue */
-    }
-
-    .tile-stale {
-        background-color: #4b5563;
-        opacity: 0.5; /* desaturating toward dead */
-    }
-
-    .tile-dead {
-        background-color: #9ca3af; /* flat grey, no longer trying to report */
-        opacity: 0.7;
-    }
-</style>
 
 @code {
     private SensorRegistrationForm newSensor = new();
@@ -203,6 +271,35 @@ else
     private async Task RefreshTileStates()
     {
         tileStates = await Http.GetFromJsonAsync<Dictionary<string, TileState>>("api/telemetry/states", JsonOptions);
+    }
+
+    private string uploadMacAddress = "";
+    private IBrowserFile? selectedFile;
+    private string uploadStatusMessage = "";
+
+    private void HandleFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+    }
+
+    private async Task UploadFile()
+    {
+        if (selectedFile is null || string.IsNullOrWhiteSpace(uploadMacAddress))
+        {
+            uploadStatusMessage = "MAC address and a file are both required.";
+            return;
+        }
+
+        using var content = new MultipartFormDataContent();
+        var fileStream = selectedFile.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+        var streamContent = new StreamContent(fileStream);
+        content.Add(streamContent, "file", selectedFile.Name);
+
+        var response = await Http.PostAsync($"api/sensors/{uploadMacAddress}/files", content);
+
+        uploadStatusMessage = response.IsSuccessStatusCode
+            ? $"File uploaded and encrypted: {await response.Content.ReadAsStringAsync()}"
+            : $"Failed: {await response.Content.ReadAsStringAsync()}";
     }
 
     private static string GetTileCssClass(TileState state) => state switch
