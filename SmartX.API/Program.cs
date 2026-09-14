@@ -28,5 +28,6 @@ app.MapSensorEndpoints();
 app.MapFileEndpoints();
 app.MapTelemetryEndpoints();
 
+TelemetryEndpoints.SeedMockData();
 
 app.Run();

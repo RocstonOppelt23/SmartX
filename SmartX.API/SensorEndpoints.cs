@@ -4,7 +4,18 @@ namespace SmartX.Api.Endpoints;
 
 public static class SensorEndpoints
 {
-    private static readonly List<SensorRegistration> Registry = new();
+    private sealed class SensorRegistry
+    {
+        private readonly List<SensorRegistration> _items = new();
+
+        public void Add(SensorRegistration registration) => _items.Add(registration);
+
+        public bool Exists(string macAddress) => _items.Any(s => s.MacAddress == macAddress);
+
+        public IReadOnlyList<SensorRegistration> GetAll() => _items.AsReadOnly();
+    }
+
+    private static readonly SensorRegistry Registry = new();
 
     private static readonly DeploymentNode FacilityTree = new()
     {
@@ -77,14 +88,14 @@ public static class SensorEndpoints
                 return Results.BadRequest(
                     $"'{registration.DeploymentLocation}' is not a recognised deployment zone.");
 
-            if (Registry.Any(r => r.MacAddress == registration.MacAddress))
+            if (Registry.Exists(registration.MacAddress))
                 return Results.Conflict("A sensor with this MAC address is already registered.");
 
             Registry.Add(registration);
             return Results.Created($"/api/sensors/{registration.MacAddress}", registration);
         });
 
-        app.MapGet("/api/sensors", () => Results.Ok(Registry));
+        app.MapGet("/api/sensors", () => Results.Ok(Registry.GetAll()));
 
         app.MapGet("/api/facility-tree/validate", () =>
         {
