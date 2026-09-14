@@ -1,7 +1,70 @@
 ﻿@page "/"
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Smart-X</PageTitle>
 
-<h1>Hello, world!</h1>
+<div class="pillar-container">
+    <h1>Smart-X IoT Mesh Ecosystem</h1>
+    <p>Select a module to continue.</p>
 
-Welcome to your new app.
+    <div class="pillar-grid">
+        <a href="/ingestion" class="pillar-card pillar-active">
+            <h2>Sensor Data Ingestion</h2>
+            <p>Register nodes, upload files, monitor live telemetry.</p>
+        </a>
+
+        <div class="pillar-card pillar-disabled">
+            <h2>Real-Time Command Stream</h2>
+            <p>Coming in Part 2.</p>
+        </div>
+
+        <div class="pillar-card pillar-disabled">
+            <h2>Network Topology</h2>
+            <p>Coming in Part 3.</p>
+        </div>
+    </div>
+</div>
+
+<style>
+    .pillar-container {
+        padding: 2rem;
+        text-align: center;
+    }
+
+    .pillar-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1.5rem;
+        margin-top: 2rem;
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .pillar-card {
+        display: block;
+        padding: 2rem 1rem;
+        border-radius: 8px;
+        text-decoration: none;
+        color: inherit;
+        border: 2px solid #ddd;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .pillar-active {
+        background: #f0f7ff;
+        border-color: #3b82f6;
+        cursor: pointer;
+    }
+
+    .pillar-active:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
+    }
+
+    .pillar-disabled {
+        background: #f5f5f5;
+        color: #999;
+        cursor: not-allowed;
+        opacity: 0.6;
+    }
+</style>
