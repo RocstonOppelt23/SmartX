@@ -4,6 +4,7 @@
 @using System.Text.Json.Serialization
 @using SmartX.Shared
 @inject HttpClient Http
+@implements IDisposable
 
 <PageTitle>Sensor Data Ingestion</PageTitle>
 
@@ -61,14 +62,88 @@ else
     </ul>
 }
 
+<hr />
+
+<h3>Send Test Telemetry</h3>
+
+<div class="form-group">
+    <label>Node ID</label>
+    <input @bind="testNodeId" class="form-control" placeholder="NODE-01" />
+</div>
+
+<div class="form-group">
+    <label>Reading Value</label>
+    <input @bind="testValue" type="number" class="form-control" />
+</div>
+
+<button class="btn btn-secondary mt-2" @onclick="SendTestTelemetry">Send Reading</button>
+
+<hr />
+
+<h3>Node Grid</h3>
+<p class="text-muted">Muted = normal. Red = anomalous. Fading grey = going stale. Flat grey = dead.</p>
+
+<div class="tile-grid">
+    @if (tileStates is not null)
+    {
+        @foreach (var (nodeId, state) in tileStates)
+        {
+            <div class="tile @GetTileCssClass(state)">
+                @nodeId
+            </div>
+        }
+    }
+</div>
+
+<style>
+    .tile-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+        gap: 10px;
+        margin-top: 1rem;
+        max-width: 700px;
+    }
+
+    .tile {
+        padding: 14px 8px;
+        border-radius: 6px;
+        text-align: center;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: white;
+        transition: background-color 0.4s ease, opacity 0.4s ease;
+    }
+
+    .tile-normal {
+        background-color: #4b5563; /* muted baseline */
+    }
+
+    .tile-anomalous {
+        background-color: #dc2626; /* single alert hue */
+    }
+
+    .tile-stale {
+        background-color: #4b5563;
+        opacity: 0.5; /* desaturating toward dead */
+    }
+
+    .tile-dead {
+        background-color: #9ca3af; /* flat grey, no longer trying to report */
+        opacity: 0.7;
+    }
+</style>
+
 @code {
     private SensorRegistrationForm newSensor = new();
     private List<SensorRegistration>? registeredSensors;
     private string statusMessage = "";
 
-    // Matches the server's JSON settings — enums as strings ("Environmental"),
-    // and camelCase property names, which is ASP.NET Minimal API's default.
-    // Without both settings, GET and POST both mismatch the API's format.
+    private string testNodeId = "NODE-01";
+    private double testValue = 24;
+
+    private Dictionary<string, TileState>? tileStates;
+    private System.Threading.Timer? pollTimer;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         Converters = { new JsonStringEnumConverter() },
@@ -78,6 +153,19 @@ else
     protected override async Task OnInitializedAsync()
     {
         await LoadSensors();
+        await RefreshTileStates();
+
+        // Poll every 3 seconds — simple and reliable stand-in for a live
+        // push, satisfies "dynamic" without depending on SignalR working
+        // perfectly under deadline pressure.
+        pollTimer = new System.Threading.Timer(async _ =>
+        {
+            await InvokeAsync(async () =>
+            {
+                await RefreshTileStates();
+                StateHasChanged();
+            });
+        }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
     }
 
     private async Task LoadSensors()
@@ -104,6 +192,30 @@ else
         {
             statusMessage = $"Failed: {await response.Content.ReadAsStringAsync()}";
         }
+    }
+
+    private async Task SendTestTelemetry()
+    {
+        await Http.PostAsync($"api/telemetry/{testNodeId}?value={testValue}", null);
+        await RefreshTileStates();
+    }
+
+    private async Task RefreshTileStates()
+    {
+        tileStates = await Http.GetFromJsonAsync<Dictionary<string, TileState>>("api/telemetry/states", JsonOptions);
+    }
+
+    private static string GetTileCssClass(TileState state) => state switch
+    {
+        TileState.Anomalous => "tile-anomalous",
+        TileState.Stale => "tile-stale",
+        TileState.Dead => "tile-dead",
+        _ => "tile-normal"
+    };
+
+    public void Dispose()
+    {
+        pollTimer?.Dispose();
     }
 
     public class SensorRegistrationForm
