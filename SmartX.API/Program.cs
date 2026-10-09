@@ -3,6 +3,10 @@ using SmartX.Api.Endpoints;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Register command stream service and background processor
+builder.Services.AddSingleton<SmartX.Api.Services.CommandStreamService>();
+builder.Services.AddHostedService<SmartX.Api.Services.QueueProcessorWorker>();
+
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     // Lets enums like SensorCategory bind from JSON strings

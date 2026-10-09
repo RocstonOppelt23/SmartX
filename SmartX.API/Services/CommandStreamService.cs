@@ -18,6 +18,14 @@ public class CommandStreamService
     // Lower number comes out first. Using timestamp ticks means the oldest critical alert goes first.
     private readonly PriorityQueue<IncomingTelemetry, long> _priorityQueue = new();
 
+    // Recent processed events shown in the UI. Insert at front so newest are first
+    // and trim to a reasonable limit to avoid unbounded memory growth.
+    private readonly List<ProcessedEvent> _recentEvents = new();
+
+    // Per-device timeline history for plotting and trend analysis. SortedDictionary
+    // keeps entries ordered by timestamp and allows efficient removal of the oldest item.
+    private readonly Dictionary<string, SortedDictionary<DateTime, double>> _history = new();
+
     public CommandStreamService()
     {
         SeedDevices();
@@ -118,6 +126,102 @@ public class CommandStreamService
         lock (_gate)
         {
             return _priorityQueue.Count;
+        }
+    }
+
+    // Process up to 'max' standard packets, but always fully drain the priority queue first.
+    // Returns the number of processed packets.
+    public int ProcessBatch(int max = 20)
+    {
+        var processed = 0;
+        lock (_gate)
+        {
+            // Drain priority queue fully
+            while (_priorityQueue.Count > 0)
+            {
+                var pkt = _priorityQueue.Dequeue();
+                var device = GetDeviceUnlocked(pkt.NodeId);
+                if (device is null) continue;
+
+                var severity = Classify(device, pkt.Value);
+                device.LastValue = pkt.Value;
+                device.LastSeen = pkt.Timestamp;
+                device.State = severity == AlertSeverity.Critical || severity == AlertSeverity.Warning ? TileState.Anomalous : TileState.Normal;
+
+                var ev = new ProcessedEvent(pkt.NodeId, pkt.Value, severity, "PRIORITY", pkt.Timestamp);
+                _recentEvents.Insert(0, ev);
+                if (_recentEvents.Count > 50) _recentEvents.RemoveRange(50, _recentEvents.Count - 50);
+
+                // Add to per-device history; ensure unique timestamp by incrementing ticks
+                if (!_history.TryGetValue(pkt.NodeId, out var dict))
+                {
+                    dict = new SortedDictionary<DateTime, double>();
+                    _history[pkt.NodeId] = dict;
+                }
+
+                var ts = pkt.Timestamp;
+                while (dict.ContainsKey(ts)) ts = ts.AddTicks(1);
+                dict[ts] = pkt.Value;
+                // Trim to most recent 300 entries
+                while (dict.Count > 300)
+                {
+                    var firstKey = dict.Keys.First();
+                    dict.Remove(firstKey);
+                }
+
+                processed++;
+            }
+
+            // Then process up to 'max' standard packets
+            while (processed < max && _standardQueue.Count > 0)
+            {
+                var pkt = _standardQueue.Dequeue();
+                var device = GetDeviceUnlocked(pkt.NodeId);
+                if (device is null) continue;
+
+                var severity = Classify(device, pkt.Value);
+                device.LastValue = pkt.Value;
+                device.LastSeen = pkt.Timestamp;
+                device.State = severity == AlertSeverity.Critical || severity == AlertSeverity.Warning ? TileState.Anomalous : TileState.Normal;
+
+                var ev = new ProcessedEvent(pkt.NodeId, pkt.Value, severity, "STANDARD", pkt.Timestamp);
+                _recentEvents.Insert(0, ev);
+                if (_recentEvents.Count > 50) _recentEvents.RemoveRange(50, _recentEvents.Count - 50);
+
+                // Add to per-device history; ensure unique timestamp by incrementing ticks
+                if (!_history.TryGetValue(pkt.NodeId, out var dict2))
+                {
+                    dict2 = new SortedDictionary<DateTime, double>();
+                    _history[pkt.NodeId] = dict2;
+                }
+
+                var ts2 = pkt.Timestamp;
+                while (dict2.ContainsKey(ts2)) ts2 = ts2.AddTicks(1);
+                dict2[ts2] = pkt.Value;
+                while (dict2.Count > 300)
+                {
+                    var firstKey = dict2.Keys.First();
+                    dict2.Remove(firstKey);
+                }
+
+                processed++;
+            }
+        }
+
+        return processed;
+    }
+
+    // Return ordered history points for a given device. 'last' specifies the
+    // maximum number of recent points to return (default 60).
+    public List<(DateTime Timestamp, double Value)> GetHistory(string mac, int last = 60)
+    {
+        lock (_gate)
+        {
+            if (!_history.TryGetValue(mac, out var dict)) return new List<(DateTime, double)>();
+
+            var list = dict.Select(kv => (kv.Key, kv.Value)).ToList();
+            // Return the most recent 'last' items
+            return list.Skip(Math.Max(0, list.Count - last)).ToList();
         }
     }
 }
