@@ -41,4 +41,16 @@ public class CommandStreamService
             State = TileState.Normal
         };
     }
+
+    public DeviceInfo? GetDevice(string mac)
+    {
+        lock (_gate)
+        {
+            if (_devices.TryGetValue(mac, out var device))
+            {
+                return device;
+            }
+            return null;
+        }
+    }
 }
