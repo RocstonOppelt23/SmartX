@@ -1,0 +1,671 @@
+@page "/command-stream"
+@using System.Globalization
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@using SmartX.Shared
+@using SmartX.Client.Services
+@inject HttpClient Http
+@inject StreamState State
+@implements IDisposable
+
+<PageTitle>Real-Time Command Stream</PageTitle>
+
+<div class="cs-shell">
+    <header class="cs-header">
+        <div>
+            <h1>Real-Time Command Stream</h1>
+            <p class="muted">Live ESP32 telemetry, critical-alert routing, manual overrides and predictive actions.</p>
+        </div>
+        <div class="cs-sim">
+            <span class="dot @(snapshot?.SimulatorEnabled == true ? "dot-live" : "dot-off")"></span>
+            <span>Device simulator @(snapshot?.SimulatorEnabled == true ? "running" : "paused")</span>
+            <button class="btn-ghost" @onclick="ToggleSimulator">@(snapshot?.SimulatorEnabled == true ? "Pause" : "Resume")</button>
+        </div>
+    </header>
+
+    @if (!string.IsNullOrEmpty(statusMessage))
+    {
+        <div class="toast @(statusIsError ? "toast-error" : "toast-ok")">@statusMessage</div>
+    }
+
+    @if (snapshot is null)
+    {
+        <div class="card muted">@(connectionError ?? "Connecting to the Smart-X API...")</div>
+    }
+    else
+    {
+        <!-- Live data-structure stats -->
+        <section class="stats">
+            <div class="stat stat-priority">
+                <div class="stat-value">@snapshot.PriorityQueueDepth</div>
+                <div class="stat-label">Priority queue (critical)</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">@snapshot.StandardQueueDepth</div>
+                <div class="stat-label">Standard queue (FIFO)</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">@snapshot.ActiveAlerts.Count</div>
+                <div class="stat-label">Active alerts (HashSet)</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">@snapshot.DuplicateAlertsBlocked</div>
+                <div class="stat-label">Duplicate alerts blocked</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">@snapshot.UndoDepth</div>
+                <div class="stat-label">Commands on undo stack</div>
+            </div>
+        </section>
+
+        <!-- Predictive Action Engine -->
+        <section class="card suggestions">
+            <h3>Suggested Actions</h3>
+            @if (snapshot.Suggestions.Count == 0)
+            {
+                <p class="muted small">No suggestions right now — the network looks healthy.</p>
+            }
+            else
+            {
+                <div class="suggestion-grid">
+                    @foreach (var s in snapshot.Suggestions)
+                    {
+                        <div class="suggestion">
+                            <div class="suggestion-title">@s.Title</div>
+                            <div class="suggestion-reason">@s.Reason</div>
+                            <div class="confidence">
+                                <div class="confidence-bar" style="width:@(Math.Clamp(s.Confidence, 0, 100))%"></div>
+                            </div>
+                            <div class="suggestion-foot">
+                                <span class="small muted">@s.Confidence% confidence</span>
+                                @if (s.Action is not null && s.NodeId is not null)
+                                {
+                                    <button class="btn-primary" @onclick="() => RunSuggestion(s)">Run</button>
+                                }
+                                else if (s.SearchText is not null)
+                                {
+                                    <button class="btn-ghost" @onclick="() => ApplySearch(s.SearchText)">Search</button>
+                                }
+                                else if (s.NodeId is not null)
+                                {
+                                    <button class="btn-ghost" @onclick="() => SelectDevice(s.NodeId)">View</button>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+
+        <div class="cs-grid">
+            <!-- Devices with search / filter -->
+            <section class="card">
+                <h3>Devices</h3>
+                <div class="filters">
+                    <input class="control" placeholder="Search name, MAC or zone..."
+                           @bind="State.SearchText" @bind:event="oninput" @bind:after="OnFilterChanged" />
+                    <select class="control" @bind="State.Category" @bind:after="OnFilterChanged">
+                        <option value="">All categories</option>
+                        <option value="Environmental">Environmental</option>
+                        <option value="Power">Power</option>
+                        <option value="Actuator">Actuator</option>
+                    </select>
+                    <label class="check">
+                        <input type="checkbox" @bind="State.AlertOnly" @bind:after="OnFilterChanged" /> Alerts only
+                    </label>
+                </div>
+
+                <div class="device-list">
+                    @foreach (var d in FilteredDevices())
+                    {
+                        <div class="device @DeviceCss(d) @(d.NodeId == State.SelectedNodeId ? "device-selected" : "")"
+                             @onclick="() => SelectDevice(d.NodeId)">
+                            <div class="device-main">
+                                <div class="device-name">@d.Name</div>
+                                <div class="small muted">@d.NodeId · @d.Location</div>
+                            </div>
+                            <div class="device-side">
+                                @if (d.Category == SensorCategory.Actuator)
+                                {
+                                    <span class="badge @(d.IsOn ? "badge-on" : "badge-off")">@(d.IsOn ? "ON" : "OFF")</span>
+                                }
+                                else
+                                {
+                                    <span class="device-value">@FormatValue(d)</span>
+                                    <span class="small muted">@StateLabel(d)</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+
+            <!-- Selected device: timeline + controls -->
+            <section class="card">
+                @if (SelectedDevice is null)
+                {
+                    <h3>Device detail</h3>
+                    <p class="muted small">Select a device to see its timeline and controls.</p>
+                }
+                else
+                {
+                    var d = SelectedDevice;
+                    <h3>@d.Name</h3>
+                    <p class="small muted">@d.NodeId · @d.Category · @d.Location</p>
+
+                    @if (d.Category == SensorCategory.Actuator)
+                    {
+                        <p>Current state: <span class="badge @(d.IsOn ? "badge-on" : "badge-off")">@(d.IsOn ? "ON" : "OFF")</span></p>
+                        <div class="btn-row">
+                            <button class="btn-primary" @onclick='() => SendCommand(d.NodeId, "ON")'>Turn ON</button>
+                            <button class="btn-ghost" @onclick='() => SendCommand(d.NodeId, "OFF")'>Turn OFF</button>
+                            <button class="btn-ghost" @onclick='() => SendCommand(d.NodeId, "TOGGLE")'>Toggle</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="timeline">
+                            @if (history.Count < 2)
+                            {
+                                <p class="muted small">Waiting for readings...</p>
+                            }
+                            else
+                            {
+                                <svg viewBox="0 0 @ChartW @ChartH" preserveAspectRatio="none" class="chart">
+                                    @if (ThresholdY() is double ty)
+                                    {
+                                        <line x1="0" x2="@ChartW" y1="@Fmt(ty)" y2="@Fmt(ty)" class="threshold" />
+                                    }
+                                    <polyline points="@ChartPoints()" class="line" />
+                                </svg>
+                                <div class="chart-axis small muted">
+                                    <span>@history.First().Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
+                                    <span>min @(history.Min(h => h.Value).ToString("0.#")) · max @(history.Max(h => h.Value).ToString("0.#")) @Unit(d)</span>
+                                    <span>@history.Last().Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
+                                </div>
+                            }
+                        </div>
+                        <p class="small muted">Timeline loaded from a SortedDictionary (ordered by timestamp). Dashed line = critical threshold.</p>
+                        <div class="btn-row">
+                            <button class="btn-danger" @onclick="() => SimulateCritical(d.NodeId)">Simulate critical alert</button>
+                            <button class="btn-ghost" @onclick="() => SimulateDisconnect(d.NodeId)">Simulate disconnect ×3</button>
+                        </div>
+                    }
+                }
+            </section>
+        </div>
+
+        <div class="cs-grid">
+            <!-- Live event feed -->
+            <section class="card">
+                <h3>Live event feed</h3>
+                <p class="small muted">Red = PRIORITY lane (bypassed the queue). Grey = STANDARD FIFO lane.</p>
+                <div class="feed">
+                    @foreach (var e in snapshot.RecentEvents)
+                    {
+                        <div class="feed-row">
+                            <span class="badge @(e.Lane == "PRIORITY" ? "badge-priority" : "badge-standard")">@e.Lane</span>
+                            <span class="feed-name">@DeviceName(e.NodeId)</span>
+                            <span>@e.Value.ToString("0.#")</span>
+                            <span class="small muted">@e.Severity</span>
+                            <span class="small muted feed-time">@e.Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
+                        </div>
+                    }
+                </div>
+            </section>
+
+            <!-- Alerts + command history -->
+            <section class="card">
+                <h3>Active alerts</h3>
+                @if (snapshot.ActiveAlerts.Count == 0)
+                {
+                    <p class="muted small">No active alerts.</p>
+                }
+                else
+                {
+                    <ul class="alert-list">
+                        @foreach (var a in snapshot.ActiveAlerts)
+                        {
+                            <li>@AlertLabel(a)</li>
+                        }
+                    </ul>
+                }
+
+                <h3 class="spaced">Command history</h3>
+                <p class="small">
+                    Last command:
+                    @if (snapshot.LastCommand is null)
+                    {
+                        <span class="muted">none</span>
+                    }
+                    else
+                    {
+                        <strong>@snapshot.LastCommand.Action</strong> <span>on @DeviceName(snapshot.LastCommand.NodeId)</span>
+                    }
+                </p>
+                <div class="btn-row">
+                    <button class="btn-primary" disabled="@(snapshot.UndoDepth == 0)" @onclick="UndoLast">Undo last command</button>
+                    <button class="btn-danger" @onclick='() => SendCommand("ALL", "SHUTDOWN_ALL_VALVES")'>Shut down all valves</button>
+                </div>
+            </section>
+        </div>
+    }
+
+    <style>
+        .cs-shell { background: linear-gradient(180deg, #0b1220, #08111a); padding: 2rem; min-height: 80vh; color: #e6eef6; }
+        .cs-shell h1, .cs-shell h3 { color: #ffffff; }
+        .cs-shell h3 { font-size: 1.05rem; margin: 0 0 0.6rem 0; }
+        .cs-shell .spaced { margin-top: 1.2rem; }
+        .cs-shell p, .cs-shell li, .cs-shell span, .cs-shell strong { color: #e5e7eb; }
+        .cs-shell .muted { color: #9ca3af; }
+        .small { font-size: 0.82rem; }
+
+        .cs-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+        .cs-header h1 { margin: 0 0 0.25rem 0; }
+        .cs-sim { display: flex; align-items: center; gap: 0.5rem; color: #e5e7eb; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .dot-live { background: #10b981; box-shadow: 0 0 8px #10b981; }
+        .dot-off { background: #6b7280; }
+
+        .toast { padding: 8px 12px; border-radius: 8px; margin-bottom: 1rem; }
+        .toast-ok { background: rgba(16,185,129,0.12); color: #10b981; }
+        .toast-error { background: rgba(239,68,68,0.12); color: #f87171; }
+
+        .card { background: #0f1724; padding: 1rem; border-radius: 10px; box-shadow: 0 6px 18px rgba(2,6,23,0.6); }
+
+        .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.75rem; margin-bottom: 1rem; }
+        .stat { background: #0f1724; border-radius: 10px; padding: 0.9rem; border: 1px solid rgba(255,255,255,0.05); }
+        .stat-priority { border-color: rgba(239,68,68,0.4); }
+        .stat-value { font-size: 1.6rem; font-weight: 700; color: #ffffff; }
+        .stat-label { font-size: 0.78rem; color: #9ca3af; }
+
+        .suggestions { margin-bottom: 1rem; border: 1px solid rgba(6,182,212,0.25); }
+        .suggestion-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.75rem; }
+        .suggestion { background: rgba(6,182,212,0.06); border-radius: 8px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; }
+        .suggestion-title { font-weight: 700; color: #ffffff; }
+        .suggestion-reason { font-size: 0.85rem; color: #d1d5db; }
+        .confidence { height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+        .confidence-bar { height: 100%; background: linear-gradient(90deg, #0ea5a4, #06b6d4); transition: width 0.4s ease; }
+        .suggestion-foot { display: flex; justify-content: space-between; align-items: center; }
+
+        .cs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; align-items: start; }
+
+        .filters { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; align-items: center; }
+        .control { background: #0b1220; border: 1px solid rgba(255,255,255,0.1); padding: 8px 10px; border-radius: 6px; color: #ffffff; }
+        .control::placeholder { color: #9ca3af; }
+        .filters input.control { flex: 1; min-width: 160px; }
+        .check { display: flex; gap: 0.35rem; align-items: center; color: #e5e7eb; font-size: 0.85rem; }
+
+        .device-list { display: grid; gap: 6px; max-height: 420px; overflow-y: auto; }
+        .device { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-radius: 6px; background: rgba(255,255,255,0.03); cursor: pointer; border-left: 4px solid #334155; transition: background 0.2s ease; }
+        .device:hover { background: rgba(255,255,255,0.06); }
+        .device-selected { outline: 1px solid #06b6d4; }
+        .device-anomalous { border-left-color: #ef4444; }
+        .device-dead { border-left-color: #6b7280; opacity: 0.6; }
+        .device-name { font-weight: 600; color: #ffffff; }
+        .device-side { display: flex; flex-direction: column; align-items: flex-end; }
+        .device-value { font-weight: 700; color: #ffffff; }
+
+        .badge { padding: 2px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 700; }
+        .badge-on { background: rgba(16,185,129,0.2); color: #10b981; }
+        .badge-off { background: rgba(107,114,128,0.25); color: #d1d5db; }
+        .badge-priority { background: rgba(239,68,68,0.25); color: #fca5a5; }
+        .badge-standard { background: rgba(107,114,128,0.25); color: #d1d5db; }
+
+        .timeline { background: #0b1220; border-radius: 8px; padding: 0.75rem; margin: 0.5rem 0; }
+        .chart { width: 100%; height: 160px; }
+        .chart .line { fill: none; stroke: #06b6d4; stroke-width: 2; vector-effect: non-scaling-stroke; }
+        .chart .threshold { stroke: #ef4444; stroke-dasharray: 6 4; stroke-width: 1; vector-effect: non-scaling-stroke; }
+        .chart-axis { display: flex; justify-content: space-between; margin-top: 0.25rem; }
+
+        .btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+        .btn-primary { background: linear-gradient(90deg,#0ea5a4,#06b6d4); border: none; color: #021019; padding: 7px 12px; border-radius: 8px; font-weight: 600; }
+        .btn-primary:disabled { opacity: 0.4; }
+        .btn-ghost { background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #e5e7eb; padding: 7px 12px; border-radius: 8px; }
+        .btn-danger { background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.5); color: #fca5a5; padding: 7px 12px; border-radius: 8px; font-weight: 600; }
+
+        .feed { display: grid; gap: 4px; max-height: 340px; overflow-y: auto; }
+        .feed-row { display: grid; grid-template-columns: 90px 1fr 60px 70px 70px; gap: 0.5rem; align-items: center; padding: 4px 6px; border-radius: 4px; background: rgba(255,255,255,0.02); color: #e5e7eb; }
+        .feed-name { color: #ffffff; }
+        .feed-time { text-align: right; }
+
+        .alert-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+        .alert-list li { padding: 6px 8px; border-radius: 6px; background: rgba(239,68,68,0.08); color: #fca5a5; }
+
+        @@media (max-width: 1000px) {
+            .stats { grid-template-columns: repeat(2, 1fr); }
+            .cs-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</div>
+
+@code {
+    private StreamSnapshot? snapshot;
+    private List<HistoryPoint> history = new();
+    private string? connectionError;
+    private string statusMessage = "";
+    private bool statusIsError;
+
+    private System.Threading.Timer? pollTimer;
+    private bool polling;
+    private CancellationTokenSource? searchDebounce;
+
+    private const int ChartW = 600;
+    private const int ChartH = 160;
+
+    // Must match the API: enums travel as strings ("Environmental").
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+
+        // Poll the API every second so the dashboard stays live.
+        pollTimer = new System.Threading.Timer(async _ =>
+        {
+            await InvokeAsync(async () =>
+            {
+                await RefreshAsync();
+                StateHasChanged();
+            });
+        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (polling) return; // don't overlap requests
+        polling = true;
+        try
+        {
+            snapshot = await Http.GetFromJsonAsync<StreamSnapshot>("api/stream/snapshot", JsonOptions);
+            connectionError = null;
+
+            if (State.SelectedNodeId is not null && SelectedDevice?.Category != SensorCategory.Actuator)
+                await LoadHistoryAsync(State.SelectedNodeId);
+        }
+        catch (Exception)
+        {
+            connectionError = "Can't reach the API at https://localhost:7251 — is SmartX.API running?";
+        }
+        finally
+        {
+            polling = false;
+        }
+    }
+
+    private async Task LoadHistoryAsync(string mac)
+    {
+        history = await Http.GetFromJsonAsync<List<HistoryPoint>>(
+            $"api/stream/history?mac={Uri.EscapeDataString(mac)}&last=60", JsonOptions) ?? new();
+    }
+
+    // ───────── Search / filter ─────────
+
+    // Display filter runs locally on every refresh so the list stays live.
+    private IEnumerable<DeviceInfo> FilteredDevices()
+    {
+        if (snapshot is null) return Enumerable.Empty<DeviceInfo>();
+        IEnumerable<DeviceInfo> list = snapshot.Devices;
+
+        if (Enum.TryParse<SensorCategory>(State.Category, out var cat))
+            list = list.Where(d => d.Category == cat);
+
+        if (State.AlertOnly)
+            list = list.Where(d => snapshot.ActiveAlerts.Any(a => a.StartsWith(d.NodeId + "|")));
+
+        if (!string.IsNullOrWhiteSpace(State.SearchText))
+        {
+            var q = State.SearchText.Trim();
+            list = list.Where(d =>
+                d.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                d.NodeId.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                d.Location.Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return list;
+    }
+
+    // When the user changes a filter, also tell the API (debounced) so the
+    // predictive engine can learn what operators search for during alerts.
+    private async Task OnFilterChanged()
+    {
+        searchDebounce?.Cancel();
+        searchDebounce = new CancellationTokenSource();
+        var token = searchDebounce.Token;
+
+        try
+        {
+            await Task.Delay(500, token);
+            var url = $"api/stream/devices?query={Uri.EscapeDataString(State.SearchText ?? "")}" +
+                      $"&category={Uri.EscapeDataString(State.Category ?? "")}&alertOnly={State.AlertOnly}";
+            await Http.GetAsync(url, token);
+        }
+        catch (TaskCanceledException) { }
+        catch (Exception) { }
+    }
+
+    private void ApplySearch(string text)
+    {
+        State.SearchText = text;
+        _ = OnFilterChanged();
+    }
+
+    // ───────── Selection ─────────
+
+    private DeviceInfo? SelectedDevice =>
+        snapshot?.Devices.FirstOrDefault(d => d.NodeId == State.SelectedNodeId);
+
+    private async Task SelectDevice(string mac)
+    {
+        State.SelectedNodeId = mac;
+        history = new();
+        if (SelectedDevice?.Category != SensorCategory.Actuator)
+        {
+            try { await LoadHistoryAsync(mac); } catch { }
+        }
+    }
+
+    // ───────── Commands ─────────
+
+    private async Task SendCommand(string nodeId, string action)
+    {
+        try
+        {
+            var response = await Http.PostAsJsonAsync("api/stream/commands", new CommandRequest(nodeId, action), JsonOptions);
+            var result = await response.Content.ReadFromJsonAsync<CommandResult>(JsonOptions);
+            ShowStatus(result?.Message ?? "Command sent.", !response.IsSuccessStatusCode);
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Command failed: {ex.Message}", true);
+        }
+    }
+
+    private Task RunSuggestion(Suggestion s) => SendCommand(s.NodeId!, s.Action!);
+
+    private async Task UndoLast()
+    {
+        try
+        {
+            var response = await Http.PostAsync("api/stream/commands/undo", null);
+            var result = await response.Content.ReadFromJsonAsync<CommandResult>(JsonOptions);
+            ShowStatus(result?.Message ?? "Undone.", !response.IsSuccessStatusCode);
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Undo failed: {ex.Message}", true);
+        }
+    }
+
+    // ───────── Demo buttons ─────────
+
+    private async Task SimulateCritical(string mac)
+    {
+        try
+        {
+            var response = await Http.PostAsync($"api/stream/simulate/critical?mac={Uri.EscapeDataString(mac)}", null);
+            var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+            if (response.IsSuccessStatusCode)
+            {
+                var lane = json.GetProperty("lane").GetString();
+                ShowStatus($"Critical reading sent → routed to the {lane} lane, skipping the standard queue.", false);
+            }
+            else
+            {
+                ShowStatus("Could not simulate a critical alert for this device.", true);
+            }
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Simulation failed: {ex.Message}", true);
+        }
+    }
+
+    private async Task SimulateDisconnect(string mac)
+    {
+        try
+        {
+            var response = await Http.PostAsync($"api/stream/simulate/disconnect?mac={Uri.EscapeDataString(mac)}", null);
+            var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+            if (response.IsSuccessStatusCode)
+            {
+                var raised = json.GetProperty("raised").GetInt32();
+                var blocked = json.GetProperty("blocked").GetInt32();
+                ShowStatus($"Disconnect alert fired 3×: {raised} raised, {blocked} blocked as duplicates by the HashSet.", false);
+            }
+            else
+            {
+                ShowStatus("Could not simulate a disconnect for this device.", true);
+            }
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Simulation failed: {ex.Message}", true);
+        }
+    }
+
+    private async Task ToggleSimulator()
+    {
+        var running = snapshot?.SimulatorEnabled == true;
+        try
+        {
+            await Http.PostAsync(running ? "api/stream/simulator/stop" : "api/stream/simulator/start", null);
+            ShowStatus(running ? "Device simulator paused." : "Device simulator resumed.", false);
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Could not change simulator: {ex.Message}", true);
+        }
+    }
+
+    private void ShowStatus(string message, bool isError)
+    {
+        statusMessage = message;
+        statusIsError = isError;
+    }
+
+    // ───────── Display helpers ─────────
+
+    private string DeviceName(string mac) =>
+        mac == "ALL" ? "all actuators"
+        : snapshot?.Devices.FirstOrDefault(d => d.NodeId == mac)?.Name ?? mac;
+
+    private string AlertLabel(string key)
+    {
+        var split = key.LastIndexOf('|');
+        if (split < 0) return key;
+        var kind = key[(split + 1)..] switch
+        {
+            "LOW" => "low reading",
+            "SPIKE" => "power spike",
+            "DISCONNECTED" => "disconnected",
+            var other => other
+        };
+        return $"{DeviceName(key[..split])} — {kind}";
+    }
+
+    private static string Unit(DeviceInfo d) => d.Category switch
+    {
+        SensorCategory.Environmental => "%",
+        SensorCategory.Power => "W",
+        _ => ""
+    };
+
+    private static string FormatValue(DeviceInfo d) => $"{d.LastValue:0.#} {Unit(d)}";
+
+    private static string StateLabel(DeviceInfo d) => d.State switch
+    {
+        TileState.Anomalous => "out of range",
+        TileState.Dead => "offline",
+        TileState.Stale => "stale",
+        _ => "normal"
+    };
+
+    private static string DeviceCss(DeviceInfo d) => d.State switch
+    {
+        TileState.Anomalous => "device-anomalous",
+        TileState.Dead => "device-dead",
+        _ => ""
+    };
+
+    // SVG numbers must use '.' decimals, even on a South African (comma) locale.
+    private static string Fmt(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private (double min, double max) ChartRange()
+    {
+        var min = history.Min(h => h.Value);
+        var max = history.Max(h => h.Value);
+
+        // Include the threshold so the dashed line is always visible.
+        var threshold = SelectedThreshold();
+        if (threshold is double t)
+        {
+            min = Math.Min(min, t);
+            max = Math.Max(max, t);
+        }
+
+        if (Math.Abs(max - min) < 0.001) { max += 1; min -= 1; }
+        var pad = (max - min) * 0.1;
+        return (min - pad, max + pad);
+    }
+
+    private double? SelectedThreshold() => SelectedDevice?.Category switch
+    {
+        SensorCategory.Environmental => 20.0,
+        SensorCategory.Power => 3000.0,
+        _ => (double?)null
+    };
+
+    private double ToY(double value, double min, double max) =>
+        ChartH - (value - min) / (max - min) * ChartH;
+
+    private double? ThresholdY()
+    {
+        if (history.Count < 2 || SelectedThreshold() is not double t) return null;
+        var (min, max) = ChartRange();
+        return ToY(t, min, max);
+    }
+
+    private string ChartPoints()
+    {
+        var (min, max) = ChartRange();
+        var step = history.Count > 1 ? (double)ChartW / (history.Count - 1) : 0;
+
+        return string.Join(" ", history.Select((h, i) => $"{Fmt(i * step)},{Fmt(ToY(h.Value, min, max))}"));
+    }
+
+    public void Dispose()
+    {
+        pollTimer?.Dispose();
+        searchDebounce?.Cancel();
+    }
+}
