@@ -11,6 +11,9 @@ public class CommandStreamService
     // Key = MAC address, Value = the device. O(1) lookup when a packet arrives.
     private readonly Dictionary<string, DeviceInfo> _devices = new();
 
+    // FIFO line for normal telemetry — first packet in is first processed.
+    private readonly Queue<IncomingTelemetry> _standardQueue = new();
+
     public CommandStreamService()
     {
         SeedDevices();
@@ -51,6 +54,24 @@ public class CommandStreamService
                 return device;
             }
             return null;
+        }
+    }
+
+    // A packet arrives → it joins the back of the line.
+    public void Enqueue(IncomingTelemetry packet)
+    {
+        lock (_gate)
+        {
+            _standardQueue.Enqueue(packet);
+        }
+    }
+
+    // How many packets are waiting? — YOUR TURN
+    public int GetQueueDepth()
+    {
+        lock (_gate)
+        {
+            return _standardQueue.Count;
         }
     }
 }
