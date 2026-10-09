@@ -25,5 +25,3 @@ Right-click the solution, Configure Startup Projects, Multiple startup projects,
 ## Run the client
 
 Set SmartX.Client to Start alongside the API (same Configure Startup Projects dialog), then press F5. A browser tab opens with the Blazor client running on https://localhost:7111. If the API's ports differ from the defaults above on your machine, update the BaseAddress in SmartX.Client/Program.cs to match before running.
-
-After creating the file, also run these commands in the terminal to commit and push it: git add README.md, then git commit -m "Add README with setup instructions", then git push
