@@ -27,24 +27,6 @@ namespace SmartX.Shared
 
     public record IncomingTelemetry(string NodeId, double Value, DateTime Timestamp);
 
-    // SensorCategory indicates the general purpose of a device so the
-    // classifier can decide severity thresholds (Environmental, Power, Actuator).
-    public enum SensorCategory
-    {
-        Environmental,
-        Power,
-        Actuator
-    }
-
-    // TileState is used by the UI to decide how to render a device tile
-    // (Normal, Anomalous when warnings/critical, Dead when disconnected).
-    public enum TileState
-    {
-        Normal,
-        Anomalous,
-        Dead
-    }
-
     // ProcessedEvent represents a single telemetry reading after it has
     // been processed by the server and inserted into the recent events timeline.
     public record ProcessedEvent(string NodeId, double Value, AlertSeverity Severity, string Lane, DateTime Timestamp);
