@@ -14,6 +14,10 @@ public class CommandStreamService
     // FIFO line for normal telemetry — first packet in is first processed.
     private readonly Queue<IncomingTelemetry> _standardQueue = new();
 
+    // Emergency line — critical alerts skip the standard queue.
+    // Lower number comes out first. Using timestamp ticks means the oldest critical alert goes first.
+    private readonly PriorityQueue<IncomingTelemetry, long> _priorityQueue = new();
+
     public CommandStreamService()
     {
         SeedDevices();
@@ -45,33 +49,75 @@ public class CommandStreamService
         };
     }
 
+    // Public lookup — takes the lock itself.
     public DeviceInfo? GetDevice(string mac)
     {
         lock (_gate)
         {
-            if (_devices.TryGetValue(mac, out var device))
-            {
-                return device;
-            }
-            return null;
+            return GetDeviceUnlocked(mac);
         }
     }
 
-    // A packet arrives → it joins the back of the line.
-    public void Enqueue(IncomingTelemetry packet)
+    // Same lookup without the lock — only call this when you're ALREADY inside lock (_gate).
+    private DeviceInfo? GetDeviceUnlocked(string mac)
+    {
+        return _devices.TryGetValue(mac, out var device) ? device : null;
+    }
+
+    // Decides how serious a reading is, based on what kind of device sent it.
+    private static AlertSeverity Classify(DeviceInfo device, double value)
+    {
+        return device.Category switch
+        {
+            // Soil moisture %: too dry is dangerous
+            SensorCategory.Environmental when value < 20 => AlertSeverity.Critical,
+            SensorCategory.Environmental when value < 30 => AlertSeverity.Warning,
+
+            // Watts: a spike is dangerous
+            SensorCategory.Power when value > 3000 => AlertSeverity.Critical,
+            SensorCategory.Power when value > 2200 => AlertSeverity.Warning,
+
+            _ => AlertSeverity.Normal
+        };
+    }
+
+    // A packet arrives → critical ones go to the emergency line, everything else to the normal line.
+    // Returns the lane it went into so the API can tell the device.
+    public string Enqueue(IncomingTelemetry packet)
     {
         lock (_gate)
         {
+            var device = GetDeviceUnlocked(packet.NodeId);
+            if (device is null) return "UNKNOWN_DEVICE";
+
+            var severity = Classify(device, packet.Value);
+
+            if (severity == AlertSeverity.Critical)
+            {
+                _priorityQueue.Enqueue(packet, packet.Timestamp.Ticks);
+                return "PRIORITY";
+            }
+
             _standardQueue.Enqueue(packet);
+            return "STANDARD";
         }
     }
 
-    // How many packets are waiting? — YOUR TURN
+    // How many normal packets are waiting.
     public int GetQueueDepth()
     {
         lock (_gate)
         {
             return _standardQueue.Count;
+        }
+    }
+
+    // How many critical packets are waiting.
+    public int GetPriorityQueueDepth()
+    {
+        lock (_gate)
+        {
+            return _priorityQueue.Count;
         }
     }
 }
