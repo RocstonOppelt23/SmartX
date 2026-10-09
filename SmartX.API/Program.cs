@@ -1,11 +1,17 @@
 using System.Text.Json.Serialization;
 using SmartX.Api.Endpoints;
+using SmartX.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Register command stream service and background processor
-builder.Services.AddSingleton<SmartX.Api.Services.CommandStreamService>();
-builder.Services.AddHostedService<SmartX.Api.Services.QueueProcessorWorker>();
+// Part 2 — Real-Time Command Stream.
+// Singletons: one shared copy of the queues/dictionaries for the whole API.
+builder.Services.AddSingleton<ActionEngine>();
+builder.Services.AddSingleton<CommandStreamService>();
+
+// Background workers: one drains the queues, one pretends to be the IoT devices.
+builder.Services.AddHostedService<QueueProcessorWorker>();
+builder.Services.AddHostedService<DeviceSimulatorWorker>();
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -28,9 +34,13 @@ var app = builder.Build();
 
 app.UseCors();
 
+// Part 1
 app.MapSensorEndpoints();
 app.MapFileEndpoints();
 app.MapTelemetryEndpoints();
+
+// Part 2
+app.MapCommandStreamEndpoints();
 
 TelemetryEndpoints.SeedMockData();
 
